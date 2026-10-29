@@ -47,9 +47,9 @@ Paste images straight from the clipboard, or drag files anywhere on the page.
 
 No build step — it's plain HTML/CSS/JS.
 
-1. Create a public repo (e.g. `BrinsGarden/studio-cutout`) and push these files to `main`.
+1. Create a public repo (e.g. `BrinsGarden/Studio-Cutout`) and push these files to `main`.
 2. Repo **Settings → Pages → Build and deployment → Deploy from a branch → `main` / root**.
-3. Open `https://brinsgarden.github.io/studio-cutout/`. In Chrome/Edge you can install it as an app from the address bar.
+3. Open `https://brinsgarden.github.io/Studio-Cutout/ (the path is case-sensitive)`. In Chrome/Edge you can install it as an app from the address bar.
 
 Running locally: any static server works, e.g. `npx serve .` or `python -m http.server`, then open `http://localhost:3000` / `:8000`. (Opening `index.html` as a file won't work — module workers need http.)
 
