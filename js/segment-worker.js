@@ -91,15 +91,8 @@ async function run({ id, key, bitmap, skipGpu }) {
   try {
     out = await seg(image);
   } catch (err) {
-    if (device !== 'webgpu') throw err;
-    // Loaded on the GPU but couldn't run there — switch this model to CPU and retry once.
-    console.warn(`[cutout] ${key} failed on WebGPU, falling back to CPU`, err);
-    noGpu.add(key);
-    self.postMessage({ type: 'gpu-failed', key });
-    current.key = null;
-    ({ seg, device } = await load(key));
-    self.postMessage({ type: 'status', key, id, text: 'Finding the subject (CPU)' });
-    out = await seg(image);
+    // Tag GPU failures so the app can restart a clean CPU-only worker.
+    throw new Error(`${device === 'webgpu' ? '[webgpu] ' : ''}${err?.message || err}`);
   }
   const result = Array.isArray(out) ? out[0] : out;
   const mask = result.mask ?? result;

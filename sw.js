@@ -1,6 +1,6 @@
 // Caches the app shell so Studio Cutout opens offline after the first visit.
 // AI model files are cached separately by transformers.js in the browser cache.
-const VERSION = 'cutout-v2';
+const VERSION = 'cutout-v4';
 const SHELL = [
   './',
   './index.html',
@@ -34,7 +34,7 @@ self.addEventListener('fetch', (e) => {
   if (!sameOrigin && !cdn) return; // model downloads etc. go straight to the network
   // network first for the app itself (so updates land), cache fallback when offline
   e.respondWith(
-    fetch(e.request)
+    fetch(sameOrigin ? new Request(e.request.url, { cache: 'no-cache' }) : e.request)
       .then((res) => {
         if (res.ok || res.type === 'opaque') {
           const copy = res.clone();

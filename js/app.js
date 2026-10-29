@@ -1,6 +1,6 @@
-import { processMask, isDefaultEdges, decontaminate, colorSelect, softenSelection } from './mask.js';
-import { composite, compositeOriginal, layout, makeCanvas, computeBounds } from './render.js';
-import { makeSampleImage } from './sample.js';
+import { processMask, isDefaultEdges, decontaminate, colorSelect, softenSelection } from './mask.js?v=4';
+import { composite, compositeOriginal, layout, makeCanvas, computeBounds } from './render.js?v=4';
+import { makeSampleImage } from './sample.js?v=4';
 
 const MAX_SIDE = 4096;      // working resolution cap (keeps memory sane on laptops)
 const MODEL_SIDE = 2048;    // image size sent to the model; the mask is upscaled back
@@ -233,7 +233,7 @@ let currentRun = null;
 
 function getWorker() {
   if (worker) return worker;
-  worker = new Worker(new URL('./segment-worker.js', import.meta.url), { type: 'module' });
+  worker = new Worker(new URL('./segment-worker.js?v=4', import.meta.url), { type: 'module' });
   worker.onmessage = (e) => {
     const m = e.data;
     if (m.type === 'progress') {
@@ -245,9 +245,7 @@ function getWorker() {
       S.engine = m.device;
       $('#engine-label').textContent = `AI running on ${m.device === 'webgpu' ? 'GPU (WebGPU)' : 'CPU (WebAssembly)'}`;
     } else if (m.type === 'gpu-failed') {
-      const list = new Set(load('noGpu', []));
-      list.add(m.key);
-      save('noGpu', [...list]);
+      markNoGpu(m.key);
     } else if (m.type === 'mask') {
       pending.get(m.id)?.resolve(m);
       pending.delete(m.id);
@@ -266,17 +264,41 @@ function getWorker() {
 }
 const mb = (b) => (b / 1048576).toFixed(b > 104857600 ? 0 : 1);
 
-async function segment(item) {
+async function segment(item, retried = false) {
   const scale = Math.min(1, MODEL_SIDE / Math.max(item.w, item.h));
   const bitmap = await createImageBitmap(item.source, scale < 1
     ? { resizeWidth: Math.round(item.w * scale), resizeHeight: Math.round(item.h * scale), resizeQuality: 'high' }
     : {});
   const w = getWorker();
-  const res = await new Promise((resolve, reject) => {
-    pending.set(item.id, { resolve, reject });
-    w.postMessage({ type: 'run', id: item.id, key: S.model, bitmap, skipGpu: load('noGpu', []) }, [bitmap]);
-  });
+  let res;
+  try {
+    res = await new Promise((resolve, reject) => {
+      pending.set(item.id, { resolve, reject });
+      w.postMessage({ type: 'run', id: item.id, key: S.model, bitmap, skipGpu: load('noGpu', []) }, [bitmap]);
+    });
+  } catch (err) {
+    if (retried || !isGpuError(err)) throw err;
+    // The GPU can't run this model (e.g. too few storage buffers on integrated graphics).
+    // Start a clean worker that skips WebGPU for this model, and remember it for next time.
+    console.warn(`[cutout] ${S.model} failed on WebGPU, switching to CPU`, err);
+    markNoGpu(S.model);
+    restartWorker();
+    setBusy('Your GPU can\'t run this model — switching to CPU', currentRun?.label || '', null);
+    return segment(item, true);
+  }
   return upscaleMask(new Uint8ClampedArray(res.data), res.width, res.height, item.w, item.h);
+}
+
+const isGpuError = (err) => /webgpu|OrtRun|storage ?buffer|shader|GPUDevice|GPUBuffer/i.test(String(err?.message || err));
+function markNoGpu(key) {
+  const list = new Set(load('noGpu', []));
+  list.add(key);
+  save('noGpu', [...list]);
+}
+function restartWorker() {
+  if (worker) { worker.terminate(); worker = null; }
+  for (const p of pending.values()) p.reject(new Error('Worker restarted'));
+  pending.clear();
 }
 
 function upscaleMask(data, mw, mh, w, h) {
