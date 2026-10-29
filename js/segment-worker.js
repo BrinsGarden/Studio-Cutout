@@ -13,6 +13,8 @@ export const MODELS = {
 
 let current = { key: null, seg: null, device: null };
 let gpuOk = null;
+// Models that failed on this GPU (e.g. shader limits on integrated graphics) run on CPU instead.
+const noGpu = new Set();
 
 async function hasWebGPU() {
   if (gpuOk !== null) return gpuOk;
@@ -44,7 +46,7 @@ async function load(key) {
   current = { key: null, seg: null, device: null };
 
   const attempts = [];
-  if (await hasWebGPU()) attempts.push({ device: 'webgpu', dtype: 'fp32' });
+  if (!noGpu.has(key) && (await hasWebGPU())) attempts.push({ device: 'webgpu', dtype: 'fp32' });
   attempts.push({ device: 'wasm', dtype: 'fp32' });
 
   let lastErr;
@@ -63,8 +65,9 @@ async function load(key) {
   throw lastErr;
 }
 
-async function run({ id, key, bitmap }) {
-  const { seg, device } = await load(key);
+async function run({ id, key, bitmap, skipGpu }) {
+  for (const k of skipGpu || []) noGpu.add(k);
+  let { seg, device } = await load(key);
   self.postMessage({ type: 'status', key, id, text: 'Finding the subject' });
 
   const { width: w, height: h } = bitmap;
@@ -84,7 +87,20 @@ async function run({ id, key, bitmap }) {
   const image = new RawImage(rgb, w, h, 3);
 
   const t0 = performance.now();
-  const out = await seg(image);
+  let out;
+  try {
+    out = await seg(image);
+  } catch (err) {
+    if (device !== 'webgpu') throw err;
+    // Loaded on the GPU but couldn't run there — switch this model to CPU and retry once.
+    console.warn(`[cutout] ${key} failed on WebGPU, falling back to CPU`, err);
+    noGpu.add(key);
+    self.postMessage({ type: 'gpu-failed', key });
+    current.key = null;
+    ({ seg, device } = await load(key));
+    self.postMessage({ type: 'status', key, id, text: 'Finding the subject (CPU)' });
+    out = await seg(image);
+  }
   const result = Array.isArray(out) ? out[0] : out;
   const mask = result.mask ?? result;
 

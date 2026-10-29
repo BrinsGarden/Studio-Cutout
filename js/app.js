@@ -244,6 +244,10 @@ function getWorker() {
     } else if (m.type === 'ready') {
       S.engine = m.device;
       $('#engine-label').textContent = `AI running on ${m.device === 'webgpu' ? 'GPU (WebGPU)' : 'CPU (WebAssembly)'}`;
+    } else if (m.type === 'gpu-failed') {
+      const list = new Set(load('noGpu', []));
+      list.add(m.key);
+      save('noGpu', [...list]);
     } else if (m.type === 'mask') {
       pending.get(m.id)?.resolve(m);
       pending.delete(m.id);
@@ -270,7 +274,7 @@ async function segment(item) {
   const w = getWorker();
   const res = await new Promise((resolve, reject) => {
     pending.set(item.id, { resolve, reject });
-    w.postMessage({ type: 'run', id: item.id, key: S.model, bitmap }, [bitmap]);
+    w.postMessage({ type: 'run', id: item.id, key: S.model, bitmap, skipGpu: load('noGpu', []) }, [bitmap]);
   });
   return upscaleMask(new Uint8ClampedArray(res.data), res.width, res.height, item.w, item.h);
 }
