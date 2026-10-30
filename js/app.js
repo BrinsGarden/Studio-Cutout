@@ -1,6 +1,6 @@
-import { processMask, isDefaultEdges, decontaminate, colorSelect, softenSelection } from './mask.js?v=4';
-import { composite, compositeOriginal, layout, makeCanvas, computeBounds } from './render.js?v=4';
-import { makeSampleImage } from './sample.js?v=4';
+import { processMask, isDefaultEdges, decontaminate, colorSelect, softenSelection } from './mask.js?v=5';
+import { composite, compositeOriginal, layout, makeCanvas, computeBounds } from './render.js?v=5';
+import { makeSampleImage } from './sample.js?v=5';
 
 const MAX_SIDE = 4096;      // working resolution cap (keeps memory sane on laptops)
 const MODEL_SIDE = 2048;    // image size sent to the model; the mask is upscaled back
@@ -24,7 +24,7 @@ const S = {
   brush: { size: 40, soft: 35 },
   wand: { tol: 32, contig: true },
   showRemoved: false,
-  model: load('model', 'general'),
+  model: load('model', 'fast'),
   style: deepMerge(structuredClone(DEFAULT_STYLE), load('style', {})),
   out: Object.assign({ fmt: 'png', quality: 92, suffix: '-cutout' }, load('export', {})),
   view: { zoom: 1, panX: 0, panY: 0, fitted: true },
@@ -233,7 +233,7 @@ let currentRun = null;
 
 function getWorker() {
   if (worker) return worker;
-  worker = new Worker(new URL('./segment-worker.js?v=4', import.meta.url), { type: 'module' });
+  worker = new Worker(new URL('./segment-worker.js?v=5', import.meta.url), { type: 'module' });
   worker.onmessage = (e) => {
     const m = e.data;
     if (m.type === 'progress') {
@@ -264,7 +264,15 @@ function getWorker() {
 }
 const mb = (b) => (b / 1048576).toFixed(b > 104857600 ? 0 : 1);
 
-async function segment(item, retried = false) {
+// Models too big for weaker laptops. When they can't run, the app switches to the Fast model.
+const HEAVY = new Set(['general', 'best']);
+const FALLBACK_MODEL = 'fast';
+
+async function segment(item, attempt = 0) {
+  // A heavy model already known not to run on this GPU would land on the CPU and run out of memory.
+  if (HEAVY.has(S.model) && load('noGpu', []).includes(S.model)) {
+    switchModel(FALLBACK_MODEL, 'That model is too heavy for this computer, so the Fast model is being used.');
+  }
   const scale = Math.min(1, MODEL_SIDE / Math.max(item.w, item.h));
   const bitmap = await createImageBitmap(item.source, scale < 1
     ? { resizeWidth: Math.round(item.w * scale), resizeHeight: Math.round(item.h * scale), resizeQuality: 'high' }
@@ -277,19 +285,38 @@ async function segment(item, retried = false) {
       w.postMessage({ type: 'run', id: item.id, key: S.model, bitmap, skipGpu: load('noGpu', []) }, [bitmap]);
     });
   } catch (err) {
-    if (retried || !isGpuError(err)) throw err;
-    // The GPU can't run this model (e.g. too few storage buffers on integrated graphics).
-    // Start a clean worker that skips WebGPU for this model, and remember it for next time.
-    console.warn(`[cutout] ${S.model} failed on WebGPU, switching to CPU`, err);
-    markNoGpu(S.model);
+    if (attempt >= 3) throw err;
+    const gpu = isGpuError(err), memory = isMemoryError(err);
+    if (!gpu && !memory) throw err;
+    console.warn(`[cutout] ${S.model} failed (${gpu ? 'GPU' : 'memory'}), retrying`, err);
+    // A failed GPU or out-of-memory run can leave the worker unusable, so always start a fresh one.
     restartWorker();
-    setBusy('Your GPU can\'t run this model — switching to CPU', currentRun?.label || '', null);
-    return segment(item, true);
+    if (gpu) markNoGpu(S.model);
+    if (HEAVY.has(S.model)) {
+      switchModel(FALLBACK_MODEL, gpu
+        ? 'Your GPU can\'t run that model, so the Fast model is being used.'
+        : 'That model needs more memory than this computer has, so the Fast model is being used.');
+      setBusy('Switching to the Fast model', currentRun?.label || '', null);
+    } else if (gpu) {
+      setBusy('Your GPU can\'t run this model — switching to CPU', currentRun?.label || '', null);
+    } else {
+      throw err; // a light model ran out of memory on the CPU: nothing smaller to try
+    }
+    return segment(item, attempt + 1);
   }
   return upscaleMask(new Uint8ClampedArray(res.data), res.width, res.height, item.w, item.h);
 }
 
-const isGpuError = (err) => /webgpu|OrtRun|storage ?buffer|shader|GPUDevice|GPUBuffer/i.test(String(err?.message || err));
+const errText = (err) => String(err?.message || err);
+const isGpuError = (err) => /^\[webgpu\]|storage ?buffer|GPUDevice|GPUBuffer|WebGPU/i.test(errText(err));
+const isMemoryError = (err) => /^\[memory\]|bad_alloc|out of memory|Array buffer allocation|could not allocate/i.test(errText(err));
+function switchModel(key, message) {
+  if (S.model === key) return;
+  S.model = key;
+  $('#model-select').value = key;
+  persist();
+  toast(message);
+}
 function markNoGpu(key) {
   const list = new Set(load('noGpu', []));
   list.add(key);
@@ -351,7 +378,7 @@ async function removeBackgrounds(items) {
       const offline = /fetch|network|Failed to load|404/i.test(err.message);
       toast(offline
         ? 'Couldn\'t download the AI model. Check your connection — it only needs to download once.'
-        : `Background removal failed: ${err.message}`, true);
+        : `Background removal failed: ${err.message.replace(/^\[(webgpu|memory)\] /, '')}`, true);
       if (offline) { todo.slice(n + 1).forEach((i) => { i.status = 'new'; }); break; }
     }
     renderTray(); redraw(); updateControls();

@@ -7,10 +7,12 @@ Companion to Studio Desktop and the Studio Android app.
 ## What it does
 
 **Cutout**
-- One-click AI background removal, three models:
-  - **Everything** — BiRefNet Lite (products, pets, objects, people)
-  - **Max detail** — BEN2 (hair, fur, fine edges; bigger download)
-  - **People only** — MODNet (fastest)
+- One-click AI background removal, four models:
+  - **Fast** (default) — RMBG-1.4. Any subject; runs on any computer (44 MB compressed version on CPU)
+  - **Sharp edges** — BiRefNet Lite. Cleaner edges; needs a strong GPU
+  - **Hair & fur** — BEN2. Finest detail; needs a strong GPU, big download
+  - **People only** — MODNet. Smallest
+- If a model can't run on your GPU it retries on the CPU; if a heavy model can't fit on this computer at all, it switches to Fast automatically and remembers that
 - Batch: add many images, remove all backgrounds in one go
 - Touch-up brushes: Erase / Restore with size and softness
 - Erase color / Keep color (magic wand, contiguous or global) — works with no AI at all, good for logos on plain backgrounds
@@ -76,5 +78,5 @@ sw.js                  offline app shell
 ## Credits
 
 - [Transformers.js](https://github.com/huggingface/transformers.js) (Apache-2.0)
-- Models: [BiRefNet Lite](https://huggingface.co/onnx-community/BiRefNet_lite-ONNX) (MIT), [BEN2](https://huggingface.co/onnx-community/BEN2-ONNX) (MIT), [MODNet](https://huggingface.co/Xenova/modnet) (Apache-2.0)
+- Models: [RMBG-1.4](https://huggingface.co/briaai/RMBG-1.4) (BRIA license — free for non-commercial use; commercial use needs a BRIA license), [BiRefNet Lite](https://huggingface.co/onnx-community/BiRefNet_lite-ONNX) (MIT), [BEN2](https://huggingface.co/onnx-community/BEN2-ONNX) (MIT), [MODNet](https://huggingface.co/Xenova/modnet) (Apache-2.0)
 - [JSZip](https://stuk.github.io/jszip/) (MIT)

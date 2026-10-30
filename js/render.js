@@ -1,5 +1,5 @@
 // Compositing: background, shadow, reflection, outline and subject, at any output scale.
-import { maskBounds } from './mask.js?v=4';
+import { maskBounds } from './mask.js?v=5';
 
 const probe = document.createElement('canvas').getContext('2d');
 probe.filter = 'blur(2px)';

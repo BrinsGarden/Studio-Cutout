@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/app.css?v=4">
+  <link rel="stylesheet" href="css/app.css?v=5">
 </head>
 <body>
   <header class="topbar">
@@ -86,9 +86,10 @@
           <label class="field">
             <span>Model</span>
             <select id="model-select">
-              <option value="general">Everything (products, pets, objects)</option>
-              <option value="best">Max detail (hair, fur — big download)</option>
-              <option value="portrait">People only (fastest)</option>
+              <option value="fast">Fast (any subject, runs on any computer)</option>
+              <option value="general">Sharp edges (needs a strong GPU)</option>
+              <option value="best">Hair &amp; fur (needs a strong GPU, big download)</option>
+              <option value="portrait">People only (smallest)</option>
             </select>
           </label>
           <button id="btn-remove" class="btn btn-primary btn-block" disabled>Remove background</button>
@@ -272,6 +273,6 @@
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js" defer></script>
-  <script type="module" src="js/app.js?v=4"></script>
+  <script type="module" src="js/app.js?v=5"></script>
 </body>
 </html>

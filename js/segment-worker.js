@@ -1,19 +1,40 @@
 // Runs the background-removal model off the main thread so the editor never freezes.
 // Models are fetched from the Hugging Face Hub once, then served from the browser cache.
-import { pipeline, env, RawImage } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.2/dist/transformers.min.js';
+import {
+  pipeline, AutoModel, ImageProcessor, env, RawImage,
+} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.2/dist/transformers.min.js';
 
 env.allowLocalModels = false;
 env.useBrowserCache = true;
 
-export const MODELS = {
-  general: { id: 'onnx-community/BiRefNet_lite-ONNX', label: 'Everything' },
-  best: { id: 'onnx-community/BEN2-ONNX', label: 'Max detail' },
-  portrait: { id: 'Xenova/modnet', label: 'People' },
+// kind 'pipeline': loaded through the background-removal pipeline.
+// kind 'rmbg': ISNet-style model loaded directly with its own preprocessing (small and memory-friendly).
+const MODELS = {
+  fast: {
+    id: 'briaai/RMBG-1.4', label: 'Fast', kind: 'rmbg',
+    // Quantized on CPU (44 MB, low memory); full precision on GPU.
+    dtype: { webgpu: 'fp32', wasm: 'q8' },
+  },
+  general: { id: 'onnx-community/BiRefNet_lite-ONNX', label: 'Sharp edges', kind: 'pipeline', dtype: { webgpu: 'fp32', wasm: 'fp32' } },
+  best: { id: 'onnx-community/BEN2-ONNX', label: 'Hair & fur', kind: 'pipeline', dtype: { webgpu: 'fp32', wasm: 'fp32' } },
+  portrait: { id: 'Xenova/modnet', label: 'People', kind: 'pipeline', dtype: { webgpu: 'fp32', wasm: 'fp32' } },
 };
 
-let current = { key: null, seg: null, device: null };
+const RMBG_PREPROCESS = {
+  do_normalize: true,
+  do_pad: false,
+  do_rescale: true,
+  do_resize: true,
+  image_mean: [0.5, 0.5, 0.5],
+  image_std: [1, 1, 1],
+  resample: 2,
+  rescale_factor: 1 / 255,
+  size: { width: 1024, height: 1024 },
+};
+
+let current = { key: null, run: null, dispose: null, device: null };
 let gpuOk = null;
-// Models that failed on this GPU (e.g. shader limits on integrated graphics) run on CPU instead.
+// Models that failed on this GPU (e.g. shader limits on integrated graphics) skip WebGPU.
 const noGpu = new Set();
 
 async function hasWebGPU() {
@@ -38,37 +59,96 @@ function progressRelay(key) {
   };
 }
 
+/** Each loader returns { run(image: RawImage) => {data: Uint8ClampedArray, width, height}, dispose() }. */
+async function loadPipeline(model, device, key) {
+  const seg = await pipeline('image-segmentation', model.id, {
+    device, dtype: model.dtype[device], progress_callback: progressRelay(key),
+  });
+  return {
+    dispose: () => seg.dispose?.(),
+    async run(image) {
+      const out = await seg(image);
+      const result = Array.isArray(out) ? out[0] : out;
+      const mask = result.mask ?? result;
+      let data = mask.data;
+      if (mask.channels > 1) {
+        const single = new Uint8ClampedArray(mask.width * mask.height);
+        for (let i = 0, j = 0; j < single.length; i += mask.channels, j++) single[j] = data[i];
+        data = single;
+      }
+      return { data: new Uint8ClampedArray(data), width: mask.width, height: mask.height };
+    },
+  };
+}
+
+async function loadRmbg(model, device, key) {
+  const net = await AutoModel.from_pretrained(model.id, {
+    device, dtype: model.dtype[device],
+    config: { model_type: 'custom' },
+    progress_callback: progressRelay(key),
+  });
+  const processor = new ImageProcessor(RMBG_PREPROCESS);
+  return {
+    dispose: () => net.dispose?.(),
+    async run(image) {
+      const { pixel_values } = await processor(image);
+      const outputs = await net({ input: pixel_values });
+      const t = outputs.output ?? Object.values(outputs)[0];
+      const [, , h, w] = t.dims;
+      const src = t.data;
+      // Stretch to the full 0..1 range, as in the reference implementation.
+      let lo = Infinity, hi = -Infinity;
+      for (let i = 0; i < src.length; i++) { const v = src[i]; if (v < lo) lo = v; if (v > hi) hi = v; }
+      const scale = hi - lo > 1e-6 ? 255 / (hi - lo) : 255;
+      const data = new Uint8ClampedArray(w * h);
+      for (let i = 0; i < data.length; i++) data[i] = (src[i] - lo) * scale;
+      t.dispose?.();
+      return { data, width: w, height: h };
+    },
+  };
+}
+
 async function load(key) {
-  if (current.key === key && current.seg) return current;
+  if (current.key === key && current.run) return current;
   const model = MODELS[key];
   if (!model) throw new Error(`Unknown model "${key}"`);
-  if (current.seg?.dispose) { try { await current.seg.dispose(); } catch {} }
-  current = { key: null, seg: null, device: null };
+  if (current.dispose) { try { await current.dispose(); } catch {} }
+  current = { key: null, run: null, dispose: null, device: null };
 
-  const attempts = [];
-  if (!noGpu.has(key) && (await hasWebGPU())) attempts.push({ device: 'webgpu', dtype: 'fp32' });
-  attempts.push({ device: 'wasm', dtype: 'fp32' });
+  const devices = [];
+  if (!noGpu.has(key) && (await hasWebGPU())) devices.push('webgpu');
+  devices.push('wasm');
 
   let lastErr;
-  for (const opts of attempts) {
+  for (const device of devices) {
     try {
-      self.postMessage({ type: 'status', key, text: `Loading ${model.label} model (${opts.device === 'webgpu' ? 'GPU' : 'CPU'})` });
-      const seg = await pipeline('image-segmentation', model.id, { ...opts, progress_callback: progressRelay(key) });
-      current = { key, seg, device: opts.device };
-      self.postMessage({ type: 'ready', key, device: opts.device });
+      self.postMessage({ type: 'status', key, text: `Loading ${model.label} model (${device === 'webgpu' ? 'GPU' : 'CPU'})` });
+      const loader = model.kind === 'rmbg' ? loadRmbg : loadPipeline;
+      const m = await loader(model, device, key);
+      current = { key, run: m.run, dispose: m.dispose, device };
+      self.postMessage({ type: 'ready', key, device });
       return current;
     } catch (err) {
       lastErr = err;
-      console.warn(`[cutout] ${model.id} on ${opts.device} failed, trying next option`, err);
+      console.warn(`[cutout] ${model.id} on ${device} failed to load`, err);
     }
   }
-  throw lastErr;
+  throw tag(lastErr, devices[devices.length - 1]);
+}
+
+const MEMORY_RE = /bad_alloc|out of memory|Array buffer allocation|memory access out of bounds|Aborted\(|could not allocate/i;
+/** Prefix errors so the app can tell GPU trouble and memory trouble apart from everything else. */
+function tag(err, device) {
+  const msg = String(err?.message || err);
+  if (device === 'webgpu') return new Error(`[webgpu] ${msg}`);
+  if (MEMORY_RE.test(msg)) return new Error(`[memory] ${msg}`);
+  return new Error(msg);
 }
 
 async function run({ id, key, bitmap, skipGpu }) {
   for (const k of skipGpu || []) noGpu.add(k);
-  let { seg, device } = await load(key);
-  self.postMessage({ type: 'status', key, id, text: 'Finding the subject' });
+  const { run: infer, device } = await load(key);
+  self.postMessage({ type: 'status', key, id, text: device === 'wasm' ? 'Finding the subject (CPU, may take a bit)' : 'Finding the subject' });
 
   const { width: w, height: h } = bitmap;
   const oc = new OffscreenCanvas(w, h);
@@ -87,23 +167,13 @@ async function run({ id, key, bitmap, skipGpu }) {
   const image = new RawImage(rgb, w, h, 3);
 
   const t0 = performance.now();
-  let out;
+  let mask;
   try {
-    out = await seg(image);
+    mask = await infer(image);
   } catch (err) {
-    // Tag GPU failures so the app can restart a clean CPU-only worker.
-    throw new Error(`${device === 'webgpu' ? '[webgpu] ' : ''}${err?.message || err}`);
+    throw tag(err, device);
   }
-  const result = Array.isArray(out) ? out[0] : out;
-  const mask = result.mask ?? result;
-
-  let data = mask.data;
-  if (mask.channels > 1) {
-    const single = new Uint8ClampedArray(mask.width * mask.height);
-    for (let i = 0, j = 0; j < single.length; i += mask.channels, j++) single[j] = data[i];
-    data = single;
-  }
-  const buf = new Uint8ClampedArray(data).buffer;
+  const buf = mask.data.buffer;
   self.postMessage(
     { type: 'mask', id, key, width: mask.width, height: mask.height, data: buf, ms: Math.round(performance.now() - t0), device },
     [buf]
