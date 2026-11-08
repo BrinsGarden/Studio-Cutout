@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/app.css?v=5">
+  <link rel="stylesheet" href="css/app.css?v=6">
 </head>
 <body>
   <header class="topbar">
@@ -101,13 +101,27 @@
           <div class="toolrow" role="radiogroup" aria-label="Brush tool">
             <button class="tool is-active" data-tool="pan" title="Move (H)"><svg viewBox="0 0 20 20"><path d="M10 2v16M2 10h16M10 2 7.5 4.5M10 2l2.5 2.5M10 18l-2.5-2.5M10 18l2.5-2.5M2 10l2.5-2.5M2 10l2.5 2.5M18 10l-2.5-2.5M18 10l-2.5 2.5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg><span>Move</span></button>
             <button class="tool" data-tool="erase" title="Erase (E)"><svg viewBox="0 0 20 20"><path d="m3 14 8-8 5 5-6 6H6zM8 17h9" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Erase</span></button>
+            <button class="tool" data-tool="bg-erase" title="Background eraser (B) — erases only the color under the +"><svg viewBox="0 0 20 20"><path d="m3 14 8-8 5 5-6 6H6zM8 17h9M2 3h.01M5 3h.01M2 6h.01" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><span>Erase bg</span></button>
             <button class="tool" data-tool="restore" title="Restore (R)"><svg viewBox="0 0 20 20"><path d="M4 16c3-1 4-4 6-6l4-4 2 2-4 4c-2 2-5 3-6 6zM12 4l4 4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Restore</span></button>
             <button class="tool" data-tool="wand-erase" title="Erase by color (W)"><svg viewBox="0 0 20 20"><path d="m3 17 9-9M12 3v2M17 8h-2M15.5 4.5 14 6M8.5 4.5 10 6M15.5 11.5 14 10" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Erase color</span></button>
             <button class="tool" data-tool="wand-keep" title="Keep by color (K)"><svg viewBox="0 0 20 20"><path d="m3 17 9-9M12 3v2M17 8h-2M15.5 4.5 14 6M8.5 4.5 10 6M15.5 11.5 14 10" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="16" cy="16" r="2.5" fill="currentColor"/></svg><span>Keep color</span></button>
           </div>
-          <div data-show-for="erase restore">
+          <div data-show-for="erase restore bg-erase">
             <label class="field range"><span>Brush size</span><input id="brush-size" type="range" min="2" max="400" value="40"><output for="brush-size"></output></label>
             <label class="field range"><span>Softness</span><input id="brush-soft" type="range" min="0" max="100" value="35"><output for="brush-soft"></output></label>
+          </div>
+          <div data-show-for="bg-erase" hidden>
+            <span class="field-label">Pick color</span>
+            <div class="chips" id="bg-sampling">
+              <button class="chip is-active" data-sampling="continuous" title="Keeps picking the color under the + as you drag">Continuous</button>
+              <button class="chip" data-sampling="once" title="Picks the color where you first press, erases only that">Once</button>
+              <button class="chip" data-sampling="swatch" title="Erases a set color — Shift+click the image to pick it">Swatch</button>
+            </div>
+            <label class="field" id="bg-swatch-field" hidden><span>Erase color</span><input id="bg-swatch" type="color" value="#ffffff"></label>
+            <label class="field range"><span>Tolerance</span><input id="bg-tol" type="range" min="0" max="100" value="35"><output for="bg-tol"></output></label>
+            <label class="check"><input id="bg-contig" type="checkbox" checked> Only touching the +</label>
+            <div class="field-pair"><label class="check"><input id="bg-protect" type="checkbox"> Protect a color</label><input id="bg-protect-color" type="color" value="#000000" title="Never erase colors close to this (hair, skin, clothing)" hidden></div>
+            <p class="hint">Keep the + on the background and trace the edge. Turn on “Remove color fringe” under Edges to kill halos.</p>
           </div>
           <div data-show-for="wand-erase wand-keep" hidden>
             <label class="field range"><span>Color tolerance</span><input id="wand-tol" type="range" min="1" max="120" value="32"><output for="wand-tol"></output></label>
@@ -273,6 +287,6 @@
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js" defer></script>
-  <script type="module" src="js/app.js?v=5"></script>
+  <script type="module" src="js/app.js?v=6"></script>
 </body>
 </html>

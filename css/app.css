@@ -145,6 +145,13 @@ button, input, select { font: inherit; color: inherit; }
   transform: translate(-50%, -50%);
 }
 .brush-cursor.erase { border-color: #ffb4a6; }
+.brush-cursor.bg::before, .brush-cursor.bg::after {
+  content: ''; position: absolute; left: 50%; top: 50%; background: #fff;
+  box-shadow: 0 0 0 1px rgba(0,0,0,.6); transform: translate(-50%, -50%);
+}
+.brush-cursor.bg::before { width: 11px; height: 1.5px; }
+.brush-cursor.bg::after { width: 1.5px; height: 11px; }
+.field-label { display: block; color: var(--ink-2); margin: 2px 0 6px; }
 
 .dropzone { position: absolute; inset: 0; display: grid; place-items: center; padding: 24px; }
 .dropzone.is-over .drop-card { border-color: var(--blade); transform: scale(1.01); }

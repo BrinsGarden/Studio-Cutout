@@ -1,6 +1,6 @@
-import { processMask, isDefaultEdges, decontaminate, colorSelect, softenSelection } from './mask.js?v=5';
-import { composite, compositeOriginal, layout, makeCanvas, computeBounds } from './render.js?v=5';
-import { makeSampleImage } from './sample.js?v=5';
+import { processMask, isDefaultEdges, decontaminate, colorSelect, softenSelection, bgEraseDab, sampleAt, hexToRgb } from './mask.js?v=6';
+import { composite, compositeOriginal, layout, makeCanvas, computeBounds } from './render.js?v=6';
+import { makeSampleImage } from './sample.js?v=6';
 
 const MAX_SIDE = 4096;      // working resolution cap (keeps memory sane on laptops)
 const MODEL_SIDE = 2048;    // image size sent to the model; the mask is upscaled back
@@ -23,6 +23,7 @@ const S = {
   tool: 'pan',
   brush: { size: 40, soft: 35 },
   wand: { tol: 32, contig: true },
+  bg: { sampling: 'continuous', contig: true, tol: 35, swatch: '#ffffff', protect: false, protectColor: '#000000' },
   showRemoved: false,
   model: load('model', 'fast'),
   style: deepMerge(structuredClone(DEFAULT_STYLE), load('style', {})),
@@ -233,7 +234,7 @@ let currentRun = null;
 
 function getWorker() {
   if (worker) return worker;
-  worker = new Worker(new URL('./segment-worker.js?v=5', import.meta.url), { type: 'module' });
+  worker = new Worker(new URL('./segment-worker.js?v=6', import.meta.url), { type: 'module' });
   worker.onmessage = (e) => {
     const m = e.data;
     if (m.type === 'progress') {
@@ -590,7 +591,7 @@ function localPoint(e) {
   const r = stage.getBoundingClientRect();
   return { x: e.clientX - r.left, y: e.clientY - r.top };
 }
-const isBrush = () => S.tab === 'cutout' && (S.tool === 'erase' || S.tool === 'restore');
+const isBrush = () => S.tab === 'cutout' && (S.tool === 'erase' || S.tool === 'restore' || S.tool === 'bg-erase');
 const isWand = () => S.tab === 'cutout' && S.tool.startsWith('wand');
 
 function updateStageCursor() {
@@ -623,6 +624,17 @@ view.addEventListener('pointerdown', (e) => {
     gesture = null;
     return;
   }
+  if (S.tool === 'bg-erase' && e.shiftKey) {
+    const ip = toImage(p.x, p.y);
+    const x = Math.floor(ip.x), y = Math.floor(ip.y);
+    if (x < 0 || y < 0 || x >= item.w || y >= item.h) return;
+    const k = (y * item.w + x) * 4, px = getRGBA(item);
+    S.bg.swatch = '#' + [px[k], px[k + 1], px[k + 2]].map((v) => v.toString(16).padStart(2, '0')).join('');
+    S.bg.sampling = 'swatch';
+    syncBgControls();
+    toast(`Erasing ${S.bg.swatch}`);
+    return;
+  }
   if (isBrush()) {
     startStroke(item);
     const ip = toImage(p.x, p.y);
@@ -639,7 +651,8 @@ view.addEventListener('pointermove', (e) => {
     cursorEl.hidden = false;
     cursorEl.style.left = `${p.x}px`; cursorEl.style.top = `${p.y}px`;
     cursorEl.style.width = cursorEl.style.height = `${size}px`;
-    cursorEl.classList.toggle('erase', S.tool === 'erase');
+    cursorEl.classList.toggle('erase', S.tool === 'erase' || S.tool === 'bg-erase');
+    cursorEl.classList.toggle('bg', S.tool === 'bg-erase');
   }
   if (!pointers.has(e.pointerId)) return;
   pointers.set(e.pointerId, p);
@@ -701,6 +714,7 @@ function startStroke(item) {
   if (!item._cov || item._cov.length !== item.mask.length) item._cov = new Uint8Array(item.mask.length);
   else item._cov.fill(0);
   item._dirty = null;
+  item._bgSample = S.bg.sampling === 'swatch' ? hexToRgb(S.bg.swatch) : null;
 }
 
 function strokeTo(item, a, b) {
@@ -712,6 +726,7 @@ function strokeTo(item, a, b) {
 }
 
 function dab(item, cx, cy) {
+  if (S.tool === 'bg-erase') return bgDab(item, cx, cy);
   const { w, h, mask, _snap: snap, _cov: cov, _cutData: cut } = item;
   const r = Math.max(0.5, S.brush.size / 2 / S.view.zoom);
   const hard = 1 - S.brush.soft / 100;
@@ -739,6 +754,41 @@ function dab(item, cx, cy) {
       if (cd) cd[p * 4 + 3] = Math.min(src[p * 4 + 3], v);
     }
   }
+  const dr = item._dirty;
+  item._dirty = dr
+    ? { x0: Math.min(dr.x0, x0), y0: Math.min(dr.y0, y0), x1: Math.max(dr.x1, x1), y1: Math.max(dr.y1, y1) }
+    : { x0, y0, x1, y1 };
+}
+
+/** Background Eraser dab: removes only pixels matching the sampled color (from the original photo). */
+function bgDab(item, cx, cy) {
+  const { w, h, mask, _snap: snap, _cov: cov, _cutData: cut } = item;
+  const src = getRGBA(item);
+  const r = Math.max(0.5, S.brush.size / 2 / S.view.zoom);
+  if (S.bg.sampling === 'continuous' || !item._bgSample) {
+    const x = Math.floor(cx), y = Math.floor(cy);
+    if (x < 0 || y < 0 || x >= w || y >= h) return;
+    item._bgSample = sampleAt(src, w, h, x, y);
+  }
+  const cd = cut?.data;
+  bgEraseDab(src, w, h, cx, cy, {
+    radius: r,
+    hard: 1 - S.brush.soft / 100,
+    sample: item._bgSample,
+    tol: S.bg.tol,
+    contig: S.bg.contig,
+    protect: S.bg.protect ? hexToRgb(S.bg.protectColor) : null,
+  }, (p, amt) => {
+    const c = (amt * 255) | 0;
+    if (c <= cov[p]) return;
+    cov[p] = c;
+    const v = (snap[p] * (255 - c)) / 255;
+    mask[p] = v;
+    if (cd) cd[p * 4 + 3] = Math.min(src[p * 4 + 3], v);
+  });
+  const x0 = Math.max(0, Math.floor(cx - r)), x1 = Math.min(w - 1, Math.ceil(cx + r));
+  const y0 = Math.max(0, Math.floor(cy - r)), y1 = Math.min(h - 1, Math.ceil(cy + r));
+  if (x0 > x1 || y0 > y1) return;
   const dr = item._dirty;
   item._dirty = dr
     ? { x0: Math.min(dr.x0, x0), y0: Math.min(dr.y0, y0), x1: Math.max(dr.x1, x1), y1: Math.max(dr.y1, y1) }
@@ -875,6 +925,19 @@ bindRange('brush-size', () => S.brush.size, (v) => { S.brush.size = v; });
 bindRange('brush-soft', () => S.brush.soft, (v) => { S.brush.soft = v; });
 bindRange('wand-tol', () => S.wand.tol, (v) => { S.wand.tol = v; });
 bindCheck('wand-contig', () => S.wand.contig, (v) => { S.wand.contig = v; });
+bindRange('bg-tol', () => S.bg.tol, (v) => { S.bg.tol = v; });
+bindCheck('bg-contig', () => S.bg.contig, (v) => { S.bg.contig = v; });
+bindCheck('bg-protect', () => S.bg.protect, (v) => { S.bg.protect = v; }, () => { $('#bg-protect-color').hidden = !S.bg.protect; });
+$$('#bg-sampling .chip').forEach((b) => b.addEventListener('click', () => { S.bg.sampling = b.dataset.sampling; syncBgControls(); }));
+$('#bg-swatch').addEventListener('input', (e) => { S.bg.swatch = e.target.value; });
+$('#bg-protect-color').addEventListener('input', (e) => { S.bg.protectColor = e.target.value; });
+function syncBgControls() {
+  $$('#bg-sampling .chip').forEach((b) => b.classList.toggle('is-active', b.dataset.sampling === S.bg.sampling));
+  $('#bg-swatch-field').hidden = S.bg.sampling !== 'swatch';
+  $('#bg-swatch').value = S.bg.swatch;
+  $('#bg-protect-color').hidden = !S.bg.protect;
+}
+syncBgControls();
 bindCheck('show-removed', () => S.showRemoved, (v) => { S.showRemoved = v; }, redraw);
 $('#btn-invert').addEventListener('click', () => {
   const it = activeItem(); if (!it) return;
@@ -1149,7 +1212,7 @@ window.addEventListener('keydown', (e) => {
   if (mod) return;
   if (e.key === ' ' && !e.repeat && activeItem()) { e.preventDefault(); setCompare(true); return; }
   const k = e.key.toLowerCase();
-  const tools = { h: 'pan', e: 'erase', r: 'restore', w: 'wand-erase', k: 'wand-keep' };
+  const tools = { h: 'pan', e: 'erase', b: 'bg-erase', r: 'restore', w: 'wand-erase', k: 'wand-keep' };
   if (tools[k]) { if (S.tab !== 'cutout') setTab('cutout'); setTool(tools[k]); return; }
   if (k === '[' || k === ']') {
     S.brush.size = Math.max(2, Math.min(400, Math.round(S.brush.size * (k === ']' ? 1.2 : 1 / 1.2))));

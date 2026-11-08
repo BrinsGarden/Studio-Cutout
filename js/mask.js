@@ -225,3 +225,81 @@ export function maskBounds(mask, w, h, threshold = 12) {
   if (x1 < 0) return null;
   return { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 };
 }
+
+/**
+ * Background Eraser (like Photoshop's): within a round brush, find pixels whose ORIGINAL color
+ * matches `sample` and report how strongly to erase each one via onPixel(index, amount 0..1).
+ * opts: { radius, hard (0..1), sample [r,g,b], tol (0..100), contig, protect [r,g,b] | null }
+ */
+export function bgEraseDab(rgba, w, h, cx, cy, opts, onPixel) {
+  const { radius: r, sample: s, tol, contig, protect } = opts;
+  const hard = Math.min(0.99, Math.max(0, opts.hard));
+  const x0 = Math.max(0, Math.floor(cx - r)), x1 = Math.min(w - 1, Math.ceil(cx + r));
+  const y0 = Math.max(0, Math.floor(cy - r)), y1 = Math.min(h - 1, Math.ceil(cy + r));
+  if (x0 > x1 || y0 > y1) return;
+  const diff = (k, c) => (Math.max(Math.abs(rgba[k] - c[0]), Math.abs(rgba[k + 1] - c[1]), Math.abs(rgba[k + 2] - c[2])) / 255) * 100;
+  const inner = tol * 0.6;
+  const match = (p) => {
+    const k = p * 4;
+    if (protect && diff(k, protect) <= Math.max(tol, 8)) return 0;
+    const d = diff(k, s);
+    if (tol <= 0) return d <= 0.5 ? 1 : 0;
+    if (d <= inner) return 1;
+    if (d >= tol) return 0;
+    const t = (d - inner) / (tol - inner);
+    return 1 - t * t * (3 - 2 * t);
+  };
+  const falloff = (x, y) => {
+    const d = Math.hypot(x + 0.5 - cx, y + 0.5 - cy) / r;
+    if (d >= 1) return 0;
+    let f = d <= hard ? 1 : 1 - (d - hard) / (1 - hard);
+    return f * f * (3 - 2 * f);
+  };
+  if (!contig) {
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+      const f = falloff(x, y);
+      if (f <= 0) continue;
+      const m = match(y * w + x);
+      if (m > 0) onPixel(y * w + x, m * f);
+    }
+    return;
+  }
+  // contiguous: flood out from the + through matching pixels inside the brush
+  const bw = x1 - x0 + 1;
+  const seen = new Uint8Array(bw * (y1 - y0 + 1));
+  const sx = Math.min(x1, Math.max(x0, Math.floor(cx))), sy = Math.min(y1, Math.max(y0, Math.floor(cy)));
+  if (!match(sy * w + sx)) return;
+  const stack = [sx, sy];
+  seen[(sy - y0) * bw + (sx - x0)] = 1;
+  const push = (x, y) => {
+    const q = (y - y0) * bw + (x - x0);
+    if (!seen[q]) { seen[q] = 1; stack.push(x, y); }
+  };
+  while (stack.length) {
+    const y = stack.pop(), x = stack.pop();
+    const f = falloff(x, y);
+    const m = f > 0 ? match(y * w + x) : 0;
+    if (m <= 0) continue;
+    onPixel(y * w + x, m * f);
+    if (x > x0) push(x - 1, y);
+    if (x < x1) push(x + 1, y);
+    if (y > y0) push(x, y - 1);
+    if (y < y1) push(x, y + 1);
+  }
+}
+
+/** Average color of the 3x3 pixels around (x, y). */
+export function sampleAt(rgba, w, h, x, y) {
+  let r = 0, g = 0, b = 0, n = 0;
+  for (let yy = Math.max(0, y - 1); yy <= Math.min(h - 1, y + 1); yy++)
+    for (let xx = Math.max(0, x - 1); xx <= Math.min(w - 1, x + 1); xx++) {
+      const k = (yy * w + xx) * 4;
+      r += rgba[k]; g += rgba[k + 1]; b += rgba[k + 2]; n++;
+    }
+  return n ? [r / n, g / n, b / n] : null;
+}
+
+export function hexToRgb(hex) {
+  const n = parseInt(hex.replace('#', ''), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
