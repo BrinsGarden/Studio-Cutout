@@ -1,6 +1,6 @@
 // Caches the app shell so Studio Cutout opens offline after the first visit.
 // AI model files are cached separately by transformers.js in the browser cache.
-const VERSION = 'cutout-v6';
+const VERSION = 'cutout-v7';
 const SHELL = [
   './',
   './index.html',
