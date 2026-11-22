@@ -34,6 +34,8 @@ const S = {
   engine: null,
 };
 S.style.flip = false; S.style.nudgeX = 0; S.style.nudgeY = 0; S.style.scale = 100;
+// Color adjustments are per-session: never carry them silently into the next image or visit.
+S.style.adj = structuredClone(DEFAULT_STYLE.adj);
 
 function load(key, fallback) {
   try { const v = localStorage.getItem('cutout.' + key); return v ? JSON.parse(v) : fallback; } catch { return fallback; }
@@ -53,7 +55,7 @@ function persist() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     const st = structuredClone(S.style);
-    delete st.flip; delete st.nudgeX; delete st.nudgeY; delete st.scale;
+    delete st.flip; delete st.nudgeX; delete st.nudgeY; delete st.scale; delete st.adj;
     if (st.bg.type === 'image') st.bg.type = 'none';
     save('style', st); save('export', S.out); save('model', S.model);
   }, 300);
